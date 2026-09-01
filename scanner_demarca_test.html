@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prueba cámara · Control Demarca</title>
+<style>
+body{margin:0;background:#f3f6f8;color:#173042;font-family:Arial,Helvetica,sans-serif}
+.app{max-width:680px;margin:0 auto;min-height:100vh;padding:16px 14px 40px}
+.card{background:#fff;border:1px solid #dce4e8;border-radius:16px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.04)}
+h1{margin:0 0 6px;font-size:24px}.muted{color:#6b7a86;font-size:14px}
+#reader{width:100%;margin-top:16px;border-radius:14px;overflow:hidden;background:#111;min-height:280px}
+button{width:100%;border:0;border-radius:12px;min-height:54px;padding:12px 14px;font-size:17px;font-weight:700;cursor:pointer}
+.primary{background:#006e72;color:#fff}.secondary{background:#e7eef1;color:#173042;margin-top:10px}
+.result{display:none;margin-top:14px;padding:14px;border-radius:12px;background:#e8f4ed;color:#16794f}
+.result.show{display:block}.ean{font-size:28px;font-weight:800;letter-spacing:1px;margin-top:5px}
+.error{display:none;margin-top:14px;padding:14px;border-radius:12px;background:#fdebea;color:#b3261e}
+.error.show{display:block}
+</style>
+</head>
+<body>
+<div class="app"><div class="card">
+<h1>Prueba cámara · Demarca</h1>
+<div class="muted">Pulsa abrir cámara y apunta a un código EAN-13.</div>
+<button id="btnStart" class="primary" style="margin-top:16px">ABRIR CÁMARA</button>
+<div id="reader"></div>
+<button id="btnStop" class="secondary" disabled>CERRAR CÁMARA</button>
+<div id="result" class="result"><strong>EAN-13 detectado</strong><div id="eanValue" class="ean"></div><div id="elapsed" class="muted" style="margin-top:6px"></div></div>
+<div id="error" class="error"></div>
+</div></div>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+let scanner=null, startedAt=0, locked=false;
+const btnStart=document.getElementById('btnStart'), btnStop=document.getElementById('btnStop'),
+result=document.getElementById('result'), errorBox=document.getElementById('error'),
+eanValue=document.getElementById('eanValue'), elapsed=document.getElementById('elapsed');
+function showError(msg){errorBox.textContent=msg;errorBox.classList.add('show')}
+function clearError(){errorBox.classList.remove('show');errorBox.textContent=''}
+async function stopScanner(){
+  if(!scanner)return;
+  try{if(scanner.isScanning)await scanner.stop()}catch(e){}
+  try{await scanner.clear()}catch(e){}
+  scanner=null;btnStop.disabled=true;btnStart.disabled=false;
+}
+async function startScanner(){
+  clearError();result.classList.remove('show');locked=false;btnStart.disabled=true;startedAt=performance.now();
+  try{
+    scanner=new Html5Qrcode('reader');
+    await scanner.start(
+      {facingMode:'environment'},
+      {fps:12,qrbox:(w,h)=>({width:Math.floor(w*.9),height:Math.max(110,Math.floor(h*.28))}),aspectRatio:1.6,disableFlip:true,formatsToSupport:[Html5QrcodeSupportedFormats.EAN_13]},
+      async decodedText=>{
+        if(locked)return;
+        const raw=String(decodedText||'').replace(/\D/g,'');
+        if(!/^\d{13}$/.test(raw))return;
+        locked=true;
+        const ms=performance.now()-startedAt;
+        eanValue.textContent=raw;
+        elapsed.textContent='Tiempo desde pulsar ABRIR CÁMARA: '+(ms/1000).toFixed(2)+' s';
+        result.classList.add('show');
+        if(navigator.vibrate)navigator.vibrate(60);
+        await stopScanner();
+      },
+      ()=>{}
+    );
+    btnStop.disabled=false;
+  }catch(e){
+    await stopScanner();
+    showError('No se pudo abrir la cámara: '+(e&&e.message?e.message:String(e)));
+  }
+}
+btnStart.addEventListener('click',startScanner);
+btnStop.addEventListener('click',stopScanner);
+window.addEventListener('beforeunload',stopScanner);
+</script>
+</body>
+</html>
