@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Scanner Demarca FAST V2</title>
+<style>
+:root{--bg:#0e171b;--card:#17242a;--ink:#fff;--muted:#b9c7cd;--ok:#39c982;--bad:#ff6b62;--warn:#ffcc66}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,Helvetica,sans-serif}
+.app{max-width:680px;margin:0 auto;min-height:100vh;padding:12px}h1{font-size:20px;margin:0 0 4px}.count{font-size:13px;color:var(--muted);margin-bottom:10px}
+#reader{width:100%;min-height:52vh;border-radius:14px;overflow:hidden;background:#000}#reader video{width:100%!important;object-fit:cover}
+.state{margin-top:10px;padding:14px;border-radius:12px;background:var(--card);text-align:center}.state .big{font-weight:800;font-size:21px}
+.state .ean{font-size:25px;font-weight:800;letter-spacing:1px;margin-top:5px}.state .small{font-size:13px;color:var(--muted);margin-top:6px}
+.state.ok{outline:2px solid var(--ok)}.state.bad{outline:2px solid var(--bad)}.state.wait{outline:2px solid var(--warn)}
+button{width:100%;border:0;border-radius:12px;min-height:52px;padding:11px;font-size:16px;font-weight:800;margin-top:10px;background:#e8eef1;color:#173042}
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>Demarca · Escaneo continuo FAST V2</h1>
+  <div class="count">Escaneados en esta apertura: <b id="count">0</b></div>
+  <div id="reader"></div>
+  <div id="state" class="state">
+    <div id="stateBig" class="big">Preparando cámara…</div>
+    <div id="stateEan" class="ean"></div>
+    <div id="stateSmall" class="small">Mantén esta pantalla abierta para escanear productos uno tras otro.</div>
+  </div>
+  <button onclick="finalizar()">FINALIZAR ESCANEO</button>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+const params = new URLSearchParams(location.search);
+const TOKEN = params.get('token') || '';
+let scanner=null, busy=false, acceptedCount=0, lastAccepted='', lastSeenAt=0, sameRearmed=true, activeSeq=0;
+const state=document.getElementById('state'), stateBig=document.getElementById('stateBig'),
+      stateEan=document.getElementById('stateEan'), stateSmall=document.getElementById('stateSmall'),
+      countEl=document.getElementById('count');
+
+function setState(kind,big,ean,small){
+  state.className='state'+(kind?' '+kind:'');
+  stateBig.textContent=big||''; stateEan.textContent=ean||''; stateSmall.textContent=small||'';
+}
+function vibrate(p){if(navigator.vibrate)navigator.vibrate(p)}
+function validEAN13(v){return /^\d{13}$/.test(String(v||'').replace(/\D/g,''))}
+function sendToParent(obj){if(window.opener)window.opener.postMessage(Object.assign({token:TOKEN},obj),'*')}
+
+setInterval(()=>{
+  if(lastAccepted && performance.now()-lastSeenAt>700) sameRearmed=true;
+},150);
+
+async function start(){
+  if(!TOKEN){
+    setState('bad','Token no válido','','Cierra y vuelve a abrir el escáner desde Control Demarca.');
+    return;
+  }
+  try{
+    scanner=new Html5Qrcode('reader');
+    await scanner.start(
+      {facingMode:'environment'},
+      {fps:16,qrbox:(w,h)=>({width:Math.floor(w*.92),height:Math.max(105,Math.floor(h*.25))}),
+       aspectRatio:1.6,disableFlip:true,formatsToSupport:[Html5QrcodeSupportedFormats.EAN_13]},
+      decodedText=>{
+        const raw=String(decodedText||'').replace(/\D/g,'');
+        if(!validEAN13(raw))return;
+        lastSeenAt=performance.now();
+        if(busy)return;
+        if(raw===lastAccepted && !sameRearmed)return;
+
+        busy=true; sameRearmed=false; lastAccepted=raw; activeSeq++;
+        setState('wait','Procesando…',raw,'Prepara el siguiente producto.');
+        sendToParent({type:'DEMARCA_EAN',ean:raw,seq:activeSeq});
+      },
+      ()=>{}
+    );
+    setState('','LISTO PARA ESCANEAR','','Apunta al EAN-13. No necesitas cerrar la cámara entre productos.');
+  }catch(e){
+    setState('bad','No se pudo abrir la cámara','',e&&e.message?e.message:String(e));
+  }
+}
+
+window.addEventListener('message',event=>{
+  const data=event.data||{};
+  if(data.type!=='DEMARCA_RESULT')return;
+  if(data.token!==TOKEN)return;
+  if(Number(data.seq||0)!==Number(activeSeq||0))return;
+
+  busy=false;
+  if(data.ok){
+    acceptedCount++; countEl.textContent=acceptedCount;
+    setState('ok',data.mensaje||'REGISTRADO',data.ean||lastAccepted,
+      data.detalle||'Retira este código y presenta el siguiente producto.');
+    vibrate([45]);
+  }else{
+    setState('bad',data.mensaje||data.codigo||'REVISAR',data.ean||lastAccepted,
+      'No destruir si la aplicación lo indica. Puedes continuar con el siguiente producto.');
+    vibrate([100,60,100]);
+  }
+});
+
+async function finalizar(){
+  sendToParent({type:'DEMARCA_SCANNER_CANCEL'});
+  try{if(scanner&&scanner.isScanning)await scanner.stop()}catch(e){}
+  try{if(scanner)await scanner.clear()}catch(e){}
+  window.close();
+}
+window.addEventListener('beforeunload',()=>{try{sendToParent({type:'DEMARCA_SCANNER_CANCEL'})}catch(e){}});
+start();
+</script>
+</body>
+</html>
