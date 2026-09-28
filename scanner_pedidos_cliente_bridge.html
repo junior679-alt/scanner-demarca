@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Escáner · Pedidos Cliente</title>
+  <style>
+    :root{--bg:#f3f6f8;--card:#fff;--ink:#173042;--muted:#6b7a86;--brand:#006e72;--ok:#16794f;--bad:#b3261e;--line:#dce4e8}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);font-family:Arial,Helvetica,sans-serif}
+    .app{max-width:680px;margin:0 auto;min-height:100vh;padding:16px 14px 40px}
+    .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+    h1{margin:0 0 6px;font-size:24px}.muted{color:var(--muted);font-size:14px}
+    #reader{width:100%;margin-top:16px;border-radius:14px;overflow:hidden;background:#111;min-height:280px}
+    button{width:100%;border:0;border-radius:12px;min-height:54px;padding:12px 14px;font-size:17px;font-weight:700;cursor:pointer}
+    .primary{background:var(--brand);color:#fff;margin-top:14px}.secondary{background:#e7eef1;color:var(--ink);margin-top:10px}
+    .result,.error{display:none;margin-top:14px;padding:14px;border-radius:12px}
+    .result.show,.error.show{display:block}.result{background:#e8f4ed;color:var(--ok)}.error{background:#fdebea;color:var(--bad)}
+    .ean{font-size:28px;font-weight:800;letter-spacing:1px;margin-top:5px;word-break:break-all}
+  </style>
+</head>
+<body>
+<div class="app"><div class="card">
+  <h1>Pedidos Cliente</h1>
+  <div class="muted" id="note">Iniciando cámara…</div>
+  <div id="reader"></div>
+  <button id="btnStart" class="primary" style="display:none">ABRIR CÁMARA</button>
+  <button id="btnCancel" class="secondary">CANCELAR Y VOLVER</button>
+  <div id="result" class="result"><strong>EAN-13 detectado</strong><div id="eanValue" class="ean"></div><div class="muted" style="margin-top:6px">Enviando a Pedidos Cliente…</div></div>
+  <div id="error" class="error"></div>
+</div></div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+let scanner=null, locked=false;
+const params=new URLSearchParams(location.search);
+const token=params.get('token')||'';
+const note=document.getElementById('note');
+const btnStart=document.getElementById('btnStart');
+const btnCancel=document.getElementById('btnCancel');
+const result=document.getElementById('result');
+const errorBox=document.getElementById('error');
+const eanValue=document.getElementById('eanValue');
+
+function showError(msg){errorBox.textContent=msg;errorBox.classList.add('show');btnStart.style.display='block'}
+function clearError(){errorBox.classList.remove('show');errorBox.textContent=''}
+async function stopScanner(){
+  if(!scanner)return;
+  try{if(scanner.isScanning)await scanner.stop()}catch(e){}
+  try{await scanner.clear()}catch(e){}
+  scanner=null;
+}
+function volverSinEAN(){
+  try{
+    if(window.opener&&!window.opener.closed){
+      window.opener.postMessage({type:'PEDIDOS_CLIENTE_SCANNER_CANCEL',token:token},'*');
+    }
+  }catch(e){}
+  window.close();
+}
+async function entregarEAN(ean){
+  result.classList.add('show');
+  eanValue.textContent=ean;
+  note.textContent='EAN detectado.';
+  if(navigator.vibrate)navigator.vibrate(60);
+  await stopScanner();
+  try{
+    if(window.opener&&!window.opener.closed){
+      window.opener.postMessage({type:'PEDIDOS_CLIENTE_EAN',ean:ean,token:token},'*');
+      setTimeout(()=>window.close(),120);
+      return;
+    }
+  }catch(e){}
+  showError('El EAN se leyó correctamente, pero no se pudo volver automáticamente a Pedidos Cliente. Vuelve a la pestaña anterior.');
+}
+async function startScanner(){
+  if(scanner||locked)return;
+  clearError();btnStart.style.display='none';note.textContent='Apunta al código EAN-13 del producto.';
+  try{
+    scanner=new Html5Qrcode('reader');
+    await scanner.start(
+      {facingMode:'environment'},
+      {fps:12,qrbox:(w,h)=>({width:Math.floor(w*.90),height:Math.max(110,Math.floor(h*.28))}),aspectRatio:1.6,disableFlip:true,formatsToSupport:[Html5QrcodeSupportedFormats.EAN_13]},
+      async decodedText=>{
+        if(locked)return;
+        const raw=String(decodedText||'').replace(/\D/g,'');
+        if(!/^\d{13}$/.test(raw))return;
+        locked=true;
+        await entregarEAN(raw);
+      },
+      ()=>{}
+    );
+  }catch(e){
+    await stopScanner();
+    const msg=e&&e.message?e.message:String(e);
+    note.textContent='No se pudo iniciar automáticamente.';
+    showError('No se pudo abrir la cámara: '+msg);
+  }
+}
+btnStart.addEventListener('click',startScanner);
+btnCancel.addEventListener('click',volverSinEAN);
+window.addEventListener('beforeunload',()=>{stopScanner()});
+window.addEventListener('load',()=>{setTimeout(startScanner,120)});
+</script>
+</body>
+</html>
